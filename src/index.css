@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Hide number-input spinners; they waste space in the dense side panels */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
