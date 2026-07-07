@@ -21,6 +21,7 @@ interface Props {
   onSelect: (id: string | null) => void;
   onCommitItem: (id: string, patch: Partial<Item>) => void;
   onCommitVertices: (verts: Pt[]) => void;
+  onCommitPerson: (p: { x: number; y: number }) => void;
 }
 
 type Gesture =
@@ -58,6 +59,9 @@ function fmtGap(n: number): string {
   return n >= 10 ? String(Math.round(n)) : n.toFixed(1);
 }
 
+/** Standing adult shoulder width; radius 25 cm. Visual-only, not part of fit-check. */
+const PERSON_DIAMETER_CM = 50;
+
 export default function CanvasView({
   room,
   selectedId,
@@ -66,6 +70,7 @@ export default function CanvasView({
   onSelect,
   onCommitItem,
   onCommitVertices,
+  onCommitPerson,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -81,6 +86,14 @@ export default function CanvasView({
   const guideDotEl = useRef<SVGCircleElement>(null);
   const guideTextEl = useRef<SVGTextElement>(null);
   const guideGroupEl = useRef<SVGGElement>(null);
+  const personEl = useRef<SVGGElement>(null);
+  const personGesture = useRef<{
+    offX: number;
+    offY: number;
+    x: number;
+    y: number;
+    moved: boolean;
+  } | null>(null);
 
   const verts = room.vertices;
   const n = verts.length;
@@ -134,6 +147,42 @@ export default function CanvasView({
       svg.getScreenCTM()!.inverse(),
     );
     return { x: p.x, y: p.y };
+  }
+
+  // ----- person drag gesture (standalone: no fit analysis, no bounds clamp) -----
+
+  function personPointerDown(e: React.PointerEvent) {
+    if (editShape || !room.person) return;
+    e.stopPropagation();
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    const p = toSvg(e);
+    personGesture.current = {
+      offX: p.x - room.person.x,
+      offY: p.y - room.person.y,
+      x: room.person.x,
+      y: room.person.y,
+      moved: false,
+    };
+  }
+
+  function personPointerMove(e: React.PointerEvent) {
+    const g = personGesture.current;
+    if (!g) return;
+    const p = toSvg(e);
+    const x = Math.round(p.x - g.offX);
+    const y = Math.round(p.y - g.offY);
+    if (x === g.x && y === g.y) return;
+    g.x = x;
+    g.y = y;
+    g.moved = true;
+    personEl.current?.setAttribute("transform", `translate(${x} ${y})`);
+  }
+
+  function personPointerUp() {
+    const g = personGesture.current;
+    if (!g) return;
+    personGesture.current = null;
+    if (g.moved) onCommitPerson({ x: g.x, y: g.y });
   }
 
   /**
@@ -589,6 +638,51 @@ export default function CanvasView({
             </g>
           );
         })}
+
+        {/* person scale reference - painted above furniture, visual-only */}
+        {room.person?.visible && (
+          <g
+            ref={personEl}
+            transform={`translate(${room.person.x} ${room.person.y})`}
+            style={{ cursor: editShape ? "default" : "move" }}
+            onPointerDown={personPointerDown}
+            onPointerMove={personPointerMove}
+            onPointerUp={personPointerUp}
+            onPointerCancel={personPointerUp}
+          >
+            <circle
+              cx={0}
+              cy={0}
+              r={PERSON_DIAMETER_CM / 2}
+              fill="#f8fafc"
+              fillOpacity={0.22}
+              stroke="#e2e8f0"
+              strokeWidth={S(1.5)}
+            />
+            <text
+              textAnchor="middle"
+              dominantBaseline="middle"
+              dy={-S(4)}
+              fontSize={S(11)}
+              fontWeight={600}
+              fill="rgba(241,245,249,0.92)"
+              pointerEvents="none"
+            >
+              Person
+            </text>
+            <text
+              textAnchor="middle"
+              dominantBaseline="middle"
+              dy={S(9)}
+              fontSize={S(9)}
+              fill="rgba(203,213,225,0.6)"
+              className="font-mono"
+              pointerEvents="none"
+            >
+              50 cm
+            </text>
+          </g>
+        )}
 
         {/* vertex handles in shape-edit mode */}
         {editShape &&

@@ -130,6 +130,10 @@ export default function App() {
     });
   }
 
+  function movePerson(x: number, y: number) {
+    patchRoom((r) => (r.person ? { ...r, person: { ...r.person, x, y } } : r));
+  }
+
   function setWallTag(segment: number, tag: WallTag | null) {
     patchRoom((r) => {
       const wallTags = { ...r.wallTags };
@@ -260,6 +264,7 @@ export default function App() {
             onSelect={setSelectedId}
             onCommitItem={updateItem}
             onCommitVertices={setVertices}
+            onCommitPerson={(p) => movePerson(p.x, p.y)}
           />
           <div className="absolute top-2 left-2 flex gap-2">
             <button
