@@ -114,6 +114,22 @@ export default function App() {
     });
   }
 
+  // ----- person scale reference -----
+
+  function togglePerson() {
+    patchRoom((r) => {
+      if (r.person) {
+        return { ...r, person: { ...r.person, visible: !r.person.visible } };
+      }
+      const bb = polygonBBox(r.vertices);
+      const c = midpoint({ x: bb.minX, y: bb.minY }, { x: bb.maxX, y: bb.maxY });
+      return {
+        ...r,
+        person: { x: Math.round(c.x), y: Math.round(c.y), visible: true },
+      };
+    });
+  }
+
   function setWallTag(segment: number, tag: WallTag | null) {
     patchRoom((r) => {
       const wallTags = { ...r.wallTags };
@@ -301,6 +317,7 @@ export default function App() {
                 onRemoveVertex={removeVertex}
                 onSetWallTag={setWallTag}
                 onDeleteRoom={deleteRoom}
+                onTogglePerson={togglePerson}
               />
             )}
           </div>
