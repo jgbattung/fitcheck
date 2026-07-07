@@ -1,4 +1,4 @@
-import type { AppState, Item, Pt, Room } from "./types";
+import type { AppState, Item, Person, Pt, Room } from "./types";
 
 const KEY = "fitcheck:v1";
 
@@ -26,6 +26,16 @@ function isItem(v: unknown): v is Item {
   );
 }
 
+function isPerson(v: unknown): v is Person {
+  if (typeof v !== "object" || v === null) return false;
+  const p = v as Person;
+  return (
+    Number.isFinite(p.x) &&
+    Number.isFinite(p.y) &&
+    typeof p.visible === "boolean"
+  );
+}
+
 function isRoom(v: unknown): v is Room {
   if (typeof v !== "object" || v === null) return false;
   const r = v as Room;
@@ -38,7 +48,8 @@ function isRoom(v: unknown): v is Room {
     typeof r.wallTags === "object" &&
     r.wallTags !== null &&
     Array.isArray(r.items) &&
-    r.items.every(isItem)
+    r.items.every(isItem) &&
+    (r.person === undefined || isPerson(r.person))
   );
 }
 
