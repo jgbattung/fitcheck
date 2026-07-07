@@ -1,10 +1,14 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { FitStatus, Item, Pt, Room } from "../types";
+import type { FitStatus, Item, Opening, Pt, Room } from "../types";
 import {
+  alongWall,
   analyzeRoom,
+  clampOpening,
   clearanceToWalls,
+  distPointToSeg,
   midpoint,
   normalizeAngle,
+  openingSegment,
   outwardNormal,
   polygonBBox,
   rectCorners,
@@ -21,6 +25,7 @@ interface Props {
   onSelect: (id: string | null) => void;
   onCommitItem: (id: string, patch: Partial<Item>) => void;
   onCommitVertices: (verts: Pt[]) => void;
+  onCommitOpening: (id: string, patch: Partial<Opening>) => void;
 }
 
 type Gesture =
@@ -34,7 +39,25 @@ type Gesture =
       moved: boolean;
     }
   | { type: "rotate"; item: Item; angle0: number; rot0: number; rot: number }
-  | { type: "vertex"; vi: number; verts: Pt[]; moved: boolean };
+  | { type: "vertex"; vi: number; verts: Pt[]; moved: boolean }
+  | {
+      type: "opening-move";
+      id: string;
+      wallIndex: number;
+      grabAlong: number;
+      offset: number;
+      length: number;
+      moved: boolean;
+    }
+  | {
+      type: "opening-resize";
+      id: string;
+      wallIndex: number;
+      edge: "start" | "end";
+      offset: number;
+      length: number;
+      moved: boolean;
+    };
 
 const STATUS_STYLE = {
   ok: (color: string) => ({ fill: color, stroke: color }),
@@ -66,6 +89,7 @@ export default function CanvasView({
   onSelect,
   onCommitItem,
   onCommitVertices,
+  onCommitOpening,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -76,11 +100,16 @@ export default function CanvasView({
   const rectEls = useRef(new Map<string, SVGRectElement>());
   const vertexEls = useRef(new Map<number, SVGCircleElement>());
   const wallEls = useRef(new Map<number, SVGLineElement>());
+  const openingEls = useRef(new Map<string, SVGLineElement>());
+  const openingHandleStartEl = useRef<SVGCircleElement>(null);
+  const openingHandleEndEl = useRef<SVGCircleElement>(null);
   const floorEl = useRef<SVGPolygonElement>(null);
   const guideLineEl = useRef<SVGLineElement>(null);
   const guideDotEl = useRef<SVGCircleElement>(null);
   const guideTextEl = useRef<SVGTextElement>(null);
   const guideGroupEl = useRef<SVGGElement>(null);
+
+  const [openingSel, setOpeningSel] = useState<string | null>(null);
 
   const verts = room.vertices;
   const n = verts.length;
@@ -313,6 +342,137 @@ export default function CanvasView({
     if (g.moved) onCommitVertices(g.verts);
   }
 
+  // ----- opening gestures (select, body-drag + re-parent, end-handle resize) -----
+
+  /** Live-write an opening's slice + (if selected) its end handles straight to the DOM. */
+  function applyOpeningLive(id: string, o: Opening) {
+    const { p1, p2 } = openingSegment(o, verts);
+    const el = openingEls.current.get(id);
+    el?.setAttribute("x1", String(p1.x));
+    el?.setAttribute("y1", String(p1.y));
+    el?.setAttribute("x2", String(p2.x));
+    el?.setAttribute("y2", String(p2.y));
+    if (openingSel === id) {
+      openingHandleStartEl.current?.setAttribute("cx", String(p1.x));
+      openingHandleStartEl.current?.setAttribute("cy", String(p1.y));
+      openingHandleEndEl.current?.setAttribute("cx", String(p2.x));
+      openingHandleEndEl.current?.setAttribute("cy", String(p2.y));
+    }
+  }
+
+  function openingPointerDown(e: React.PointerEvent, o: Opening) {
+    if (editShape) return;
+    e.stopPropagation();
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    setOpeningSel(o.id);
+    const a = verts[o.wallIndex];
+    const b = verts[(o.wallIndex + 1) % n];
+    gesture.current = {
+      type: "opening-move",
+      id: o.id,
+      wallIndex: o.wallIndex,
+      grabAlong: alongWall(toSvg(e), a, b) - o.offset,
+      offset: o.offset,
+      length: o.length,
+      moved: false,
+    };
+  }
+
+  function openingPointerMove(e: React.PointerEvent, o: Opening) {
+    const g = gesture.current;
+    if (!g || g.type !== "opening-move" || g.id !== o.id) return;
+    const p = toSvg(e);
+    const a = verts[g.wallIndex];
+    const b = verts[(g.wallIndex + 1) % n];
+    const wl = segLength(a, b);
+    const along = alongWall(p, a, b);
+    const slideOffset = Math.max(0, Math.min(along - g.grabAlong, wl - g.length));
+
+    // Re-parent to the nearest wall if the pointer has drifted onto another one.
+    let bestJ = g.wallIndex;
+    let bestD = Infinity;
+    for (let j = 0; j < n; j++) {
+      const { d } = distPointToSeg(p, verts[j], verts[(j + 1) % n]);
+      if (d < bestD) {
+        bestD = d;
+        bestJ = j;
+      }
+    }
+
+    if (bestJ !== g.wallIndex) {
+      const na = verts[bestJ];
+      const nb = verts[(bestJ + 1) % n];
+      const clamped = clampOpening(
+        { ...o, wallIndex: bestJ, offset: alongWall(p, na, nb) - g.length / 2, length: g.length },
+        segLength(na, nb),
+      );
+      g.wallIndex = bestJ;
+      g.offset = clamped.offset;
+      g.length = clamped.length;
+    } else {
+      g.offset = slideOffset;
+    }
+    g.moved = true;
+    applyOpeningLive(o.id, { ...o, wallIndex: g.wallIndex, offset: g.offset, length: g.length });
+  }
+
+  function openingPointerUp(o: Opening) {
+    const g = gesture.current;
+    if (!g || g.type !== "opening-move" || g.id !== o.id) return;
+    gesture.current = null;
+    if (g.moved) {
+      onCommitOpening(o.id, {
+        wallIndex: g.wallIndex,
+        offset: g.offset,
+        length: g.length,
+      });
+    }
+  }
+
+  function openingResizeDown(e: React.PointerEvent, o: Opening, edge: "start" | "end") {
+    e.stopPropagation();
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    gesture.current = {
+      type: "opening-resize",
+      id: o.id,
+      wallIndex: o.wallIndex,
+      edge,
+      offset: o.offset,
+      length: o.length,
+      moved: false,
+    };
+  }
+
+  function openingResizeMove(e: React.PointerEvent, o: Opening) {
+    const g = gesture.current;
+    if (!g || g.type !== "opening-resize" || g.id !== o.id) return;
+    const a = verts[g.wallIndex];
+    const b = verts[(g.wallIndex + 1) % n];
+    const wl = segLength(a, b);
+    const along = alongWall(toSvg(e), a, b);
+    let offset = g.offset;
+    let length = g.length;
+    if (g.edge === "end") {
+      length = along - g.offset;
+    } else {
+      const farEnd = g.offset + g.length;
+      offset = along;
+      length = farEnd - offset;
+    }
+    const clamped = clampOpening({ ...o, offset, length }, wl);
+    g.offset = clamped.offset;
+    g.length = clamped.length;
+    g.moved = true;
+    applyOpeningLive(o.id, { ...o, offset: g.offset, length: g.length });
+  }
+
+  function openingResizeUp(o: Opening) {
+    const g = gesture.current;
+    if (!g || g.type !== "opening-resize" || g.id !== o.id) return;
+    gesture.current = null;
+    if (g.moved) onCommitOpening(o.id, { offset: g.offset, length: g.length });
+  }
+
   // ----- static render helpers -----
 
   const gridLines = useMemo(() => {
@@ -341,7 +501,10 @@ export default function CanvasView({
         viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`}
         preserveAspectRatio="xMidYMid meet"
         style={{ touchAction: "none" }}
-        onPointerDown={() => onSelect(null)}
+        onPointerDown={() => {
+          onSelect(null);
+          setOpeningSel(null);
+        }}
       >
         {/* floor */}
         <polygon ref={floorEl} points={pointsStr} fill="#0e1a30" />
@@ -364,7 +527,6 @@ export default function CanvasView({
         {/* walls */}
         {verts.map((a, i) => {
           const b = verts[(i + 1) % n];
-          const tag = room.wallTags[i];
           return (
             <line
               key={i}
@@ -376,15 +538,99 @@ export default function CanvasView({
               y1={a.y}
               x2={b.x}
               y2={b.y}
-              stroke={tag ? tag.color : "#8ea3bd"}
-              strokeWidth={S(tag ? 5 : 4)}
+              stroke="#8ea3bd"
+              strokeWidth={S(4)}
               strokeLinecap="square"
-              strokeDasharray={tag?.isDoor ? `${S(12)} ${S(7)}` : undefined}
             />
           );
         })}
 
-        {/* dimension + tag labels */}
+        {/* openings: fat colored slices glued to their wall */}
+        {room.openings.map((o) => {
+          const { p1, p2 } = openingSegment(o, verts);
+          return (
+            <line
+              key={o.id}
+              ref={(el) => {
+                if (el) openingEls.current.set(o.id, el);
+                else openingEls.current.delete(o.id);
+              }}
+              x1={p1.x}
+              y1={p1.y}
+              x2={p2.x}
+              y2={p2.y}
+              stroke={o.kind === "door" ? "#f59e0b" : "#38bdf8"}
+              strokeWidth={S(9)}
+              strokeLinecap="butt"
+              strokeDasharray={o.kind === "door" ? `${S(12)} ${S(7)}` : undefined}
+              style={{ cursor: editShape ? "default" : "grab" }}
+              onPointerDown={(e) => openingPointerDown(e, o)}
+              onPointerMove={(e) => openingPointerMove(e, o)}
+              onPointerUp={() => openingPointerUp(o)}
+              onPointerCancel={() => openingPointerUp(o)}
+            />
+          );
+        })}
+
+        {/* end-handle resize for the selected opening */}
+        {!editShape &&
+          openingSel &&
+          (() => {
+            const o = room.openings.find((op) => op.id === openingSel);
+            if (!o) return null;
+            const { p1, p2 } = openingSegment(o, verts);
+            const color = o.kind === "door" ? "#f59e0b" : "#38bdf8";
+            return (
+              <g>
+                <circle
+                  ref={openingHandleStartEl}
+                  cx={p1.x}
+                  cy={p1.y}
+                  r={S(6)}
+                  fill="#e2e8f0"
+                  stroke={color}
+                  strokeWidth={S(2)}
+                  pointerEvents="none"
+                />
+                <circle
+                  cx={p1.x}
+                  cy={p1.y}
+                  r={S(18)}
+                  fill="transparent"
+                  pointerEvents="all"
+                  style={{ cursor: "ew-resize" }}
+                  onPointerDown={(e) => openingResizeDown(e, o, "start")}
+                  onPointerMove={(e) => openingResizeMove(e, o)}
+                  onPointerUp={() => openingResizeUp(o)}
+                  onPointerCancel={() => openingResizeUp(o)}
+                />
+                <circle
+                  ref={openingHandleEndEl}
+                  cx={p2.x}
+                  cy={p2.y}
+                  r={S(6)}
+                  fill="#e2e8f0"
+                  stroke={color}
+                  strokeWidth={S(2)}
+                  pointerEvents="none"
+                />
+                <circle
+                  cx={p2.x}
+                  cy={p2.y}
+                  r={S(18)}
+                  fill="transparent"
+                  pointerEvents="all"
+                  style={{ cursor: "ew-resize" }}
+                  onPointerDown={(e) => openingResizeDown(e, o, "end")}
+                  onPointerMove={(e) => openingResizeMove(e, o)}
+                  onPointerUp={() => openingResizeUp(o)}
+                  onPointerCancel={() => openingResizeUp(o)}
+                />
+              </g>
+            );
+          })()}
+
+        {/* dimension labels */}
         <g pointerEvents="none" className="font-mono">
           {verts.map((a, i) => {
             const b = verts[(i + 1) % n];
@@ -394,43 +640,23 @@ export default function CanvasView({
             const m = midpoint(a, b);
             let angle = (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI;
             if (angle > 90 || angle <= -90) angle += 180;
-            const tag = room.wallTags[i];
             const dimPos = {
               x: m.x + nrm.x * S(16),
               y: m.y + nrm.y * S(16),
             };
-            const tagPos = {
-              x: m.x + nrm.x * S(34),
-              y: m.y + nrm.y * S(34),
-            };
             return (
-              <g key={i}>
-                <text
-                  x={dimPos.x}
-                  y={dimPos.y}
-                  transform={`rotate(${angle} ${dimPos.x} ${dimPos.y})`}
-                  textAnchor="middle"
-                  dominantBaseline="middle"
-                  fontSize={S(11)}
-                  fill="#8094ad"
-                >
-                  {fmtLen(len)}
-                </text>
-                {tag && tag.label && (
-                  <text
-                    x={tagPos.x}
-                    y={tagPos.y}
-                    transform={`rotate(${angle} ${tagPos.x} ${tagPos.y})`}
-                    textAnchor="middle"
-                    dominantBaseline="middle"
-                    fontSize={S(10)}
-                    letterSpacing={S(1.5)}
-                    fill={tag.color}
-                  >
-                    {tag.label.toUpperCase()}
-                  </text>
-                )}
-              </g>
+              <text
+                key={i}
+                x={dimPos.x}
+                y={dimPos.y}
+                transform={`rotate(${angle} ${dimPos.x} ${dimPos.y})`}
+                textAnchor="middle"
+                dominantBaseline="middle"
+                fontSize={S(11)}
+                fill="#8094ad"
+              >
+                {fmtLen(len)}
+              </text>
             );
           })}
         </g>
