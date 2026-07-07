@@ -1,5 +1,6 @@
-import type { Pt, Room, WallTag } from "../types";
-import { segLength } from "../geometry";
+import { useState } from "react";
+import type { Opening, Pt, Room } from "../types";
+import { segLength, wallLength } from "../geometry";
 import { NumberField, inputCls } from "./ui";
 
 interface Props {
@@ -11,11 +12,16 @@ interface Props {
   onSetVertex: (vi: number, p: Pt) => void;
   onInsertVertex: (afterSegment: number) => void;
   onRemoveVertex: (vi: number) => void;
-  onSetWallTag: (segment: number, tag: WallTag | null) => void;
+  onAddOpening: (draft: Omit<Opening, "id">) => void;
+  onUpdateOpening: (id: string, patch: Partial<Opening>) => void;
+  onDeleteOpening: (id: string) => void;
   onDeleteRoom: () => void;
 }
 
-const TAG_COLORS = ["#38bdf8", "#f59e0b", "#34d399", "#fb7185", "#a78bfa"];
+const OPENING_COLOR: Record<Opening["kind"], string> = {
+  window: "#38bdf8",
+  door: "#f59e0b",
+};
 
 export default function RoomPanel({
   room,
@@ -26,10 +32,27 @@ export default function RoomPanel({
   onSetVertex,
   onInsertVertex,
   onRemoveVertex,
-  onSetWallTag,
+  onAddOpening,
+  onUpdateOpening,
+  onDeleteOpening,
   onDeleteRoom,
 }: Props) {
   const n = room.vertices.length;
+
+  const [newWall, setNewWall] = useState(0);
+  const wallIndex = Math.min(newWall, n - 1);
+  const curWallLen = wallLength(room.vertices, wallIndex);
+  const [newKind, setNewKind] = useState<Opening["kind"]>("window");
+  const [newWidth, setNewWidth] = useState(() =>
+    Math.min(90, wallLength(room.vertices, wallIndex)),
+  );
+  const [newOffset, setNewOffset] = useState(0);
+
+  function selectWall(i: number) {
+    setNewWall(i);
+    setNewWidth(Math.min(90, wallLength(room.vertices, i)));
+    setNewOffset(0);
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -134,86 +157,139 @@ export default function RoomPanel({
 
       <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
         <p className="mb-2 text-xs font-medium uppercase tracking-wider text-slate-400">
-          Walls
+          Openings
         </p>
-        <ul className="flex flex-col gap-3">
-          {room.vertices.map((a, i) => {
-            const b = room.vertices[(i + 1) % n];
-            const len = segLength(a, b);
-            const tag = room.wallTags[i];
-            return (
-              <li
-                key={i}
-                className="rounded-md border border-slate-800 p-2"
-                style={tag ? { borderColor: `${tag.color}66` } : undefined}
-              >
-                <div className="mb-1.5 flex items-center justify-between">
-                  <span className="font-mono text-xs text-slate-400">
-                    Wall {i + 1} · {Math.round(len * 10) / 10} cm
-                  </span>
-                  {tag && (
+
+        <div className="mb-3 flex flex-col gap-2 rounded-md border border-slate-800 p-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              aria-label="New opening wall"
+              className={`${inputCls} min-w-0 flex-1 basis-32 py-1 text-xs`}
+              value={wallIndex}
+              onChange={(e) => selectWall(Number(e.target.value))}
+            >
+              {room.vertices.map((a, i) => {
+                const b = room.vertices[(i + 1) % n];
+                const len = Math.round(segLength(a, b) * 10) / 10;
+                return (
+                  <option key={i} value={i}>
+                    Wall {i + 1} · {len} cm
+                  </option>
+                );
+              })}
+            </select>
+            <select
+              aria-label="New opening kind"
+              className={`${inputCls} py-1 text-xs`}
+              value={newKind}
+              onChange={(e) => setNewKind(e.target.value as Opening["kind"])}
+            >
+              <option value="window">Window</option>
+              <option value="door">Door</option>
+            </select>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex flex-1 basis-20 items-center gap-1.5 text-[11px] text-slate-400">
+              Width
+              <NumberField
+                aria-label="New opening width"
+                value={newWidth}
+                min={0}
+                className="w-full"
+                onCommit={setNewWidth}
+              />
+            </label>
+            <label className="flex flex-1 basis-20 items-center gap-1.5 text-[11px] text-slate-400">
+              Offset
+              <NumberField
+                aria-label="New opening offset"
+                value={newOffset}
+                min={0}
+                className="w-full"
+                onCommit={setNewOffset}
+              />
+            </label>
+            <button
+              className="cursor-pointer rounded-md border border-sky-500/40 px-2.5 py-1.5 text-xs text-sky-300 transition-colors duration-200 hover:bg-sky-500/10 focus-visible:ring-2 focus-visible:ring-sky-400 focus-visible:outline-none"
+              onClick={() =>
+                onAddOpening({
+                  wallIndex,
+                  offset: newOffset,
+                  length: newWidth,
+                  kind: newKind,
+                })
+              }
+            >
+              Add opening
+            </button>
+          </div>
+          <p className="text-[11px] leading-relaxed text-slate-500">
+            Wall {wallIndex + 1} is {Math.round(curWallLen * 10) / 10} cm long.
+          </p>
+        </div>
+
+        <ul className="flex flex-col gap-2">
+          {room.openings.length === 0 && (
+            <li className="text-[11px] text-slate-500">No openings yet.</li>
+          )}
+          {room.openings.map((o) => (
+            <li
+              key={o.id}
+              className="rounded-md border border-slate-800 p-2"
+              style={{ borderColor: `${OPENING_COLOR[o.kind]}66` }}
+            >
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="font-mono text-xs text-slate-400">
+                  Wall {o.wallIndex + 1}
+                </span>
+                <button
+                  className="cursor-pointer text-[11px] text-slate-500 transition-colors duration-150 hover:text-red-400 focus-visible:ring-2 focus-visible:ring-red-400 focus-visible:outline-none"
+                  onClick={() => onDeleteOpening(o.id)}
+                >
+                  Delete
+                </button>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex gap-1">
+                  {(["window", "door"] as const).map((k) => (
                     <button
-                      className="cursor-pointer text-[11px] text-slate-500 transition-colors duration-150 hover:text-red-400 focus-visible:ring-2 focus-visible:ring-red-400 focus-visible:outline-none"
-                      onClick={() => onSetWallTag(i, null)}
+                      key={k}
+                      aria-label={`Set opening ${k}`}
+                      className={`cursor-pointer rounded-full border px-2 py-0.5 text-[11px] capitalize transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-white/60 focus-visible:outline-none ${
+                        o.kind === k
+                          ? "border-white text-white"
+                          : "border-transparent text-slate-400 opacity-70 hover:opacity-100"
+                      }`}
+                      style={{ backgroundColor: `${OPENING_COLOR[k]}33` }}
+                      onClick={() => onUpdateOpening(o.id, { kind: k })}
                     >
-                      Clear tag
+                      {k}
                     </button>
-                  )}
+                  ))}
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <input
-                    className={`${inputCls} min-w-0 flex-1 basis-24 py-1 text-xs`}
-                    placeholder="Tag label (window, door…)"
-                    aria-label={`Wall ${i + 1} tag label`}
-                    value={tag?.label ?? ""}
-                    onChange={(e) =>
-                      onSetWallTag(i, {
-                        label: e.target.value,
-                        color: tag?.color ?? TAG_COLORS[0],
-                        isDoor: tag?.isDoor,
-                      })
-                    }
+                <label className="flex flex-1 basis-20 items-center gap-1.5 text-[11px] text-slate-400">
+                  Width
+                  <NumberField
+                    aria-label={`Opening on wall ${o.wallIndex + 1} width`}
+                    value={o.length}
+                    min={0}
+                    className="w-full"
+                    onCommit={(length) => onUpdateOpening(o.id, { length })}
                   />
-                  <div className="flex gap-1">
-                    {TAG_COLORS.map((c) => (
-                      <button
-                        key={c}
-                        aria-label={`Wall ${i + 1} tag color ${c}`}
-                        className={`h-5 w-5 cursor-pointer rounded-full border transition-transform duration-150 focus-visible:ring-2 focus-visible:ring-white/60 focus-visible:outline-none ${
-                          tag?.color === c
-                            ? "border-white"
-                            : "border-transparent opacity-60 hover:opacity-100"
-                        }`}
-                        style={{ backgroundColor: c }}
-                        onClick={() =>
-                          onSetWallTag(i, {
-                            label: tag?.label ?? "",
-                            color: c,
-                            isDoor: tag?.isDoor,
-                          })
-                        }
-                      />
-                    ))}
-                  </div>
-                  <label className="flex cursor-pointer items-center gap-1.5 text-xs text-slate-400">
-                    <input
-                      type="checkbox"
-                      className="h-3.5 w-3.5 cursor-pointer accent-sky-500"
-                      checked={tag?.isDoor ?? false}
-                      onChange={(e) =>
-                        onSetWallTag(i, {
-                          label: tag?.label ?? "Door",
-                          color: tag?.color ?? TAG_COLORS[1],
-                          isDoor: e.target.checked,
-                        })
-                      }
-                    />
-                    Door opening
-                  </label>
-                </div>
-              </li>
-            );
-          })}
+                </label>
+                <label className="flex flex-1 basis-20 items-center gap-1.5 text-[11px] text-slate-400">
+                  Offset
+                  <NumberField
+                    aria-label={`Opening on wall ${o.wallIndex + 1} offset`}
+                    value={o.offset}
+                    min={0}
+                    className="w-full"
+                    onCommit={(offset) => onUpdateOpening(o.id, { offset })}
+                  />
+                </label>
+              </div>
+            </li>
+          ))}
         </ul>
       </section>
 
