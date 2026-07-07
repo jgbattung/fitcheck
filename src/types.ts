@@ -30,6 +30,14 @@ export interface Item {
   color: string;
 }
 
+export interface Person {
+  /** center x, cm - same coordinate space as Item.x */
+  x: number;
+  /** center y, cm - same coordinate space as Item.y */
+  y: number;
+  visible: boolean;
+}
+
 export interface Room {
   id: string;
   name: string;
@@ -37,6 +45,8 @@ export interface Room {
   vertices: Pt[];
   openings: Opening[];
   items: Item[];
+  /** optional single visual scale reference; absent = hidden */
+  person?: Person;
 }
 
 export interface AppState {

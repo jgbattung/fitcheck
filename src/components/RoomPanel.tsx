@@ -16,6 +16,7 @@ interface Props {
   onUpdateOpening: (id: string, patch: Partial<Opening>) => void;
   onDeleteOpening: (id: string) => void;
   onDeleteRoom: () => void;
+  onTogglePerson: () => void;
 }
 
 const OPENING_COLOR: Record<Opening["kind"], string> = {
@@ -36,6 +37,7 @@ export default function RoomPanel({
   onUpdateOpening,
   onDeleteOpening,
   onDeleteRoom,
+  onTogglePerson,
 }: Props) {
   const n = room.vertices.length;
 
@@ -291,6 +293,25 @@ export default function RoomPanel({
             </li>
           ))}
         </ul>
+      </section>
+
+      <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
+        <p className="mb-2 text-xs font-medium uppercase tracking-wider text-slate-400">
+          Scale reference
+        </p>
+        <label className="flex cursor-pointer items-center gap-1.5 text-xs text-slate-400">
+          <input
+            type="checkbox"
+            className="h-3.5 w-3.5 cursor-pointer accent-sky-500"
+            checked={room.person?.visible ?? false}
+            onChange={onTogglePerson}
+          />
+          Show person (50 cm)
+        </label>
+        <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500">
+          A 50 cm circle for a standing adult - drag it on the canvas to gauge
+          scale. Not counted in fit checks.
+        </p>
       </section>
 
       <button

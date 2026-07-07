@@ -143,6 +143,26 @@ export default function App() {
     patchRoom((r) => ({ ...r, openings: r.openings.filter((o) => o.id !== id) }));
   }
 
+  // ----- person scale reference -----
+
+  function togglePerson() {
+    patchRoom((r) => {
+      if (r.person) {
+        return { ...r, person: { ...r.person, visible: !r.person.visible } };
+      }
+      const bb = polygonBBox(r.vertices);
+      const c = midpoint({ x: bb.minX, y: bb.minY }, { x: bb.maxX, y: bb.maxY });
+      return {
+        ...r,
+        person: { x: Math.round(c.x), y: Math.round(c.y), visible: true },
+      };
+    });
+  }
+
+  function movePerson(x: number, y: number) {
+    patchRoom((r) => (r.person ? { ...r, person: { ...r.person, x, y } } : r));
+  }
+
   // ----- rooms -----
 
   function switchRoom(id: string) {
@@ -262,6 +282,7 @@ export default function App() {
             onCommitItem={updateItem}
             onCommitVertices={setVertices}
             onCommitOpening={updateOpening}
+            onCommitPerson={(p) => movePerson(p.x, p.y)}
           />
           <div className="absolute top-2 left-2 flex gap-2">
             <button
@@ -321,6 +342,7 @@ export default function App() {
                 onUpdateOpening={updateOpening}
                 onDeleteOpening={deleteOpening}
                 onDeleteRoom={deleteRoom}
+                onTogglePerson={togglePerson}
               />
             )}
           </div>

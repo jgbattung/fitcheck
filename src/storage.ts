@@ -1,4 +1,4 @@
-import type { AppState, Item, Opening, Pt, Room } from "./types";
+import type { AppState, Item, Opening, Person, Pt, Room } from "./types";
 import { uid } from "./types";
 import { clampOpening, wallLength } from "./geometry";
 
@@ -44,6 +44,16 @@ function isOpening(v: unknown, wallCount: number): v is Opening {
   );
 }
 
+function isPerson(v: unknown): v is Person {
+  if (typeof v !== "object" || v === null) return false;
+  const p = v as Person;
+  return (
+    Number.isFinite(p.x) &&
+    Number.isFinite(p.y) &&
+    typeof p.visible === "boolean"
+  );
+}
+
 function isRoom(v: unknown): v is Room {
   if (typeof v !== "object" || v === null) return false;
   const r = v as Room;
@@ -56,7 +66,8 @@ function isRoom(v: unknown): v is Room {
     Array.isArray(r.openings) &&
     r.openings.every((o) => isOpening(o, r.vertices.length)) &&
     Array.isArray(r.items) &&
-    r.items.every(isItem)
+    r.items.every(isItem) &&
+    (r.person === undefined || isPerson(r.person))
   );
 }
 
