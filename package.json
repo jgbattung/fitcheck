@@ -6,9 +6,11 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "typecheck:api": "tsc -p api/tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@upstash/redis": "^1.38.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
@@ -16,6 +18,7 @@
     "@tailwindcss/vite": "^4.1.0",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
+    "@vercel/node": "^5.8.22",
     "@vitejs/plugin-react": "^4.4.0",
     "tailwindcss": "^4.1.0",
     "typescript": "^5.7.0",
