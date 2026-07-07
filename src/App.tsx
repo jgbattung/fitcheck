@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AppState, Item, Pt, Room, WallTag } from "./types";
+import type { AppState, Item, Opening, Pt, Room } from "./types";
 import { uid } from "./types";
-import { analyzeRoom, midpoint, polygonBBox } from "./geometry";
+import { analyzeRoom, clampOpening, midpoint, polygonBBox, wallLength } from "./geometry";
 import { ITEM_COLORS, makeRoom, seedState } from "./seed";
 import { exportToFile, importFromFile, loadState, saveState } from "./storage";
 import CanvasView from "./components/CanvasView";
@@ -78,52 +78,69 @@ export default function App() {
     }));
   }
 
-  /** Split segment `i` at its midpoint; tags on later segments shift up. */
+  /** Split segment `i` at its midpoint; openings on later segments shift up. */
   function insertVertex(i: number) {
     patchRoom((r) => {
       const n = r.vertices.length;
       const m = midpoint(r.vertices[i], r.vertices[(i + 1) % n]);
       const vertices = [...r.vertices];
       vertices.splice(i + 1, 0, { x: Math.round(m.x), y: Math.round(m.y) });
-      const wallTags: Record<number, WallTag> = {};
-      for (const [k, tag] of Object.entries(r.wallTags)) {
-        const ki = Number(k);
-        wallTags[ki > i ? ki + 1 : ki] = tag;
-      }
-      return { ...r, vertices, wallTags };
+      const openings = r.openings.map((o) =>
+        o.wallIndex > i
+          ? { ...o, wallIndex: o.wallIndex + 1 }
+          : o.wallIndex === i
+            ? clampOpening(o, wallLength(vertices, i))
+            : o,
+      );
+      return { ...r, vertices, openings };
     });
   }
 
-  /** Remove vertex `vi`; the two walls it joined merge, their tags are dropped. */
+  /** Remove vertex `vi`; the two walls it joined merge, their openings drop. */
   function removeVertex(vi: number) {
     patchRoom((r) => {
       const n = r.vertices.length;
       if (n <= 3) return r;
       const prevSeg = (vi - 1 + n) % n;
-      const wallTags: Record<number, WallTag> = {};
-      for (const [k, tag] of Object.entries(r.wallTags)) {
-        const ki = Number(k);
-        if (ki === vi || ki === prevSeg) continue;
-        wallTags[ki > vi ? ki - 1 : ki] = tag;
-      }
+      const openings = r.openings
+        .filter((o) => o.wallIndex !== vi && o.wallIndex !== prevSeg)
+        .map((o) => ({
+          ...o,
+          wallIndex: o.wallIndex > vi ? o.wallIndex - 1 : o.wallIndex,
+        }));
       return {
         ...r,
         vertices: r.vertices.filter((_, i) => i !== vi),
-        wallTags,
+        openings,
       };
     });
   }
 
-  function setWallTag(segment: number, tag: WallTag | null) {
-    patchRoom((r) => {
-      const wallTags = { ...r.wallTags };
-      if (tag === null || (tag.label === "" && !tag.isDoor)) {
-        delete wallTags[segment];
-      } else {
-        wallTags[segment] = tag;
-      }
-      return { ...r, wallTags };
-    });
+  // ----- openings -----
+
+  function addOpening(draft: Omit<Opening, "id">) {
+    patchRoom((r) => ({
+      ...r,
+      openings: [
+        ...r.openings,
+        clampOpening({ ...draft, id: uid() }, wallLength(r.vertices, draft.wallIndex)),
+      ],
+    }));
+  }
+
+  function updateOpening(id: string, patch: Partial<Opening>) {
+    patchRoom((r) => ({
+      ...r,
+      openings: r.openings.map((o) => {
+        if (o.id !== id) return o;
+        const merged = { ...o, ...patch };
+        return clampOpening(merged, wallLength(r.vertices, merged.wallIndex));
+      }),
+    }));
+  }
+
+  function deleteOpening(id: string) {
+    patchRoom((r) => ({ ...r, openings: r.openings.filter((o) => o.id !== id) }));
   }
 
   // ----- rooms -----
@@ -244,6 +261,7 @@ export default function App() {
             onSelect={setSelectedId}
             onCommitItem={updateItem}
             onCommitVertices={setVertices}
+            onCommitOpening={updateOpening}
           />
           <div className="absolute top-2 left-2 flex gap-2">
             <button
@@ -299,7 +317,9 @@ export default function App() {
                 onSetVertex={setVertex}
                 onInsertVertex={insertVertex}
                 onRemoveVertex={removeVertex}
-                onSetWallTag={setWallTag}
+                onAddOpening={addOpening}
+                onUpdateOpening={updateOpening}
+                onDeleteOpening={deleteOpening}
                 onDeleteRoom={deleteRoom}
               />
             )}
