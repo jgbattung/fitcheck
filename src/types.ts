@@ -3,10 +3,15 @@ export interface Pt {
   y: number;
 }
 
-export interface WallTag {
-  label: string;
-  color: string;
-  isDoor?: boolean;
+export interface Opening {
+  id: string;
+  /** index of the wall this opening lives on; wall i runs vertices[i] -> vertices[(i+1)%n] */
+  wallIndex: number;
+  /** cm along the wall from its start vertex (vertices[wallIndex]) */
+  offset: number;
+  /** cm length of the opening along the wall */
+  length: number;
+  kind: "window" | "door";
 }
 
 export interface Item {
@@ -30,13 +35,12 @@ export interface Room {
   name: string;
   /** polygon, cm; segment i runs from vertices[i] to vertices[(i+1) % n] */
   vertices: Pt[];
-  /** keyed by segment index */
-  wallTags: Record<number, WallTag>;
+  openings: Opening[];
   items: Item[];
 }
 
 export interface AppState {
-  version: 1;
+  version: 2;
   rooms: Room[];
   currentRoomId: string;
 }
