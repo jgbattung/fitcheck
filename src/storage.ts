@@ -1,4 +1,6 @@
-import type { AppState, Item, Pt, Room } from "./types";
+import type { AppState, Item, Opening, Pt, Room } from "./types";
+import { uid } from "./types";
+import { clampOpening, wallLength } from "./geometry";
 
 const KEY = "fitcheck:v1";
 
@@ -26,6 +28,22 @@ function isItem(v: unknown): v is Item {
   );
 }
 
+function isOpening(v: unknown, wallCount: number): v is Opening {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Opening;
+  return (
+    typeof o.id === "string" &&
+    Number.isInteger(o.wallIndex) &&
+    o.wallIndex >= 0 &&
+    o.wallIndex < wallCount &&
+    Number.isFinite(o.offset) &&
+    o.offset >= 0 &&
+    Number.isFinite(o.length) &&
+    o.length > 0 &&
+    (o.kind === "window" || o.kind === "door")
+  );
+}
+
 function isRoom(v: unknown): v is Room {
   if (typeof v !== "object" || v === null) return false;
   const r = v as Room;
@@ -35,22 +53,57 @@ function isRoom(v: unknown): v is Room {
     Array.isArray(r.vertices) &&
     r.vertices.length >= 3 &&
     r.vertices.every(isPt) &&
-    typeof r.wallTags === "object" &&
-    r.wallTags !== null &&
+    Array.isArray(r.openings) &&
+    r.openings.every((o) => isOpening(o, r.vertices.length)) &&
     Array.isArray(r.items) &&
     r.items.every(isItem)
   );
+}
+
+/** Migrates a legacy (v1) room with `wallTags` into the v2 `openings` shape. Idempotent for v2 rooms. */
+function migrateRoom(raw: any): any {
+  if (raw && typeof raw === "object" && Array.isArray(raw.openings)) {
+    return raw;
+  }
+  const vertices = raw?.vertices;
+  const wallTags = raw?.wallTags;
+  const openings: Opening[] = [];
+  if (wallTags && typeof wallTags === "object" && Array.isArray(vertices)) {
+    for (const key of Object.keys(wallTags)) {
+      const wallIndex = Number(key);
+      if (!Number.isInteger(wallIndex) || wallIndex < 0 || wallIndex >= vertices.length) {
+        continue;
+      }
+      const tag = wallTags[key];
+      const len = wallLength(vertices, wallIndex);
+      openings.push(
+        clampOpening(
+          {
+            id: uid(),
+            wallIndex,
+            offset: 0,
+            length: len,
+            kind: tag?.isDoor ? "door" : "window",
+          },
+          len,
+        ),
+      );
+    }
+  }
+  const { wallTags: _wallTags, ...rest } = raw ?? {};
+  return { ...rest, openings };
 }
 
 export function validateState(v: unknown): AppState | null {
   if (typeof v !== "object" || v === null) return null;
   const s = v as AppState;
   if (!Array.isArray(s.rooms) || s.rooms.length === 0) return null;
-  if (!s.rooms.every(isRoom)) return null;
-  const currentRoomId = s.rooms.some((r) => r.id === s.currentRoomId)
+  const rooms = s.rooms.map(migrateRoom);
+  if (!rooms.every(isRoom)) return null;
+  const currentRoomId = rooms.some((r) => r.id === s.currentRoomId)
     ? s.currentRoomId
-    : s.rooms[0].id;
-  return { version: 1, rooms: s.rooms, currentRoomId };
+    : rooms[0].id;
+  return { version: 2, rooms, currentRoomId };
 }
 
 export function loadState(): AppState | null {
