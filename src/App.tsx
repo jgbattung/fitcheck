@@ -4,9 +4,21 @@ import { uid } from "./types";
 import { analyzeRoom, clampOpening, midpoint, polygonBBox, wallLength } from "./geometry";
 import { ITEM_COLORS, makeRoom, seedState } from "./seed";
 import { exportToFile, importFromFile, loadState, saveState } from "./storage";
+import {
+  mintSpaceCode,
+  pullSpace,
+  pushSpace,
+  readSpaceCode,
+  writeSpaceCodeToUrl,
+  clearSpaceCodeFromUrl,
+  SPACE_POLL_MS,
+  SPACE_PUSH_DEBOUNCE_MS,
+  type SpaceEnvelope,
+} from "./sync";
 import CanvasView from "./components/CanvasView";
 import ItemsPanel from "./components/ItemsPanel";
 import RoomPanel from "./components/RoomPanel";
+import { SyncControl, SyncNudge, type SyncStatus } from "./components/SyncBar";
 
 export default function App() {
   const [state, setState] = useState<AppState>(() => loadState() ?? seedState());
@@ -15,6 +27,14 @@ export default function App() {
   const [snapAngle, setSnapAngle] = useState(false);
   const [tab, setTab] = useState<"items" | "room">("items");
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // ----- shared sync (opt-in via ?s=<code>) -----
+  const [syncCode, setSyncCode] = useState<string | null>(() => readSpaceCode());
+  const [baseRev, setBaseRev] = useState(0);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>("idle");
+  const [remoteAhead, setRemoteAhead] = useState<SpaceEnvelope | null>(null);
+  const justAppliedRemoteRef = useRef(false);
+  const spaceInitRef = useRef(false);
 
   const room =
     state.rooms.find((r) => r.id === state.currentRoomId) ?? state.rooms[0];
@@ -26,6 +46,107 @@ export default function App() {
     const t = setTimeout(() => saveState(state), 400);
     return () => clearTimeout(t);
   }, [state]);
+
+  // On mount (or when a code is minted), pull its state (or seed it as rev 0).
+  // spaceInitRef gates the push effect below so it cannot race this initial
+  // pull-or-push with a duplicate push of the pre-sync local state.
+  useEffect(() => {
+    if (!syncCode) return;
+    spaceInitRef.current = false;
+    let cancelled = false;
+    pullSpace(syncCode).then((envelope) => {
+      if (cancelled) return;
+      if (envelope) {
+        justAppliedRemoteRef.current = true;
+        setState(envelope.state);
+        setBaseRev(envelope.rev);
+        setSyncStatus("synced");
+        spaceInitRef.current = true;
+      } else {
+        pushSpace(syncCode, 0, state).then((result) => {
+          if (cancelled) return;
+          if ("ok" in result) {
+            setBaseRev(result.rev);
+            setSyncStatus("synced");
+          } else if ("conflict" in result) {
+            setRemoteAhead(result.envelope);
+          } else {
+            setSyncStatus("offline");
+          }
+          spaceInitRef.current = true;
+        });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+    // Intentionally run only when the space code changes, not on every state edit.
+  }, [syncCode]);
+
+  // Push local edits to the space, debounced. Skips the echo right after a
+  // remote apply so pulling doesn't immediately trigger a push of the same data.
+  useEffect(() => {
+    if (!syncCode) return;
+    if (!spaceInitRef.current) return;
+    if (justAppliedRemoteRef.current) {
+      justAppliedRemoteRef.current = false;
+      return;
+    }
+    setSyncStatus("syncing");
+    const t = setTimeout(() => {
+      pushSpace(syncCode, baseRev, state).then((result) => {
+        if ("ok" in result) {
+          setBaseRev(result.rev);
+          setSyncStatus("synced");
+        } else if ("conflict" in result) {
+          setRemoteAhead(result.envelope);
+        } else {
+          setSyncStatus("offline");
+        }
+      });
+    }, SPACE_PUSH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [state, syncCode]);
+
+  // Poll the space for edits made on another device.
+  useEffect(() => {
+    if (!syncCode) return;
+    const id = setInterval(() => {
+      pullSpace(syncCode).then((envelope) => {
+        if (envelope && envelope.rev > baseRev) {
+          setRemoteAhead(envelope);
+        }
+      });
+    }, SPACE_POLL_MS);
+    return () => clearInterval(id);
+  }, [syncCode, baseRev]);
+
+  function shareSpace() {
+    const code = mintSpaceCode();
+    writeSpaceCodeToUrl(code);
+    // The new code has never been pushed, so the init effect's pull will 404
+    // and push the current local state as revision 0 for us.
+    setSyncCode(code);
+  }
+
+  function leaveSpace() {
+    clearSpaceCodeFromUrl();
+    setSyncCode(null);
+    setBaseRev(0);
+    setSyncStatus("idle");
+    setRemoteAhead(null);
+  }
+
+  function reloadFromRemote() {
+    if (!remoteAhead) return;
+    // remoteAhead.state is already validated (pullSpace/pushSpace run it
+    // through validateState before it ever reaches this component).
+    justAppliedRemoteRef.current = true;
+    setState(remoteAhead.state);
+    setBaseRev(remoteAhead.rev);
+    setSyncStatus("synced");
+    setRemoteAhead(null);
+  }
 
   function patchRoom(fn: (r: Room) => Room) {
     setState((s) => ({
@@ -269,7 +390,19 @@ export default function App() {
             e.target.value = "";
           }}
         />
+        <div className="mx-1 hidden h-5 w-px bg-slate-800 sm:block" />
+        <SyncControl
+          syncCode={syncCode}
+          syncStatus={syncStatus}
+          remoteAhead={remoteAhead !== null}
+          onShare={shareSpace}
+          onLeave={leaveSpace}
+        />
       </header>
+
+      {remoteAhead && (
+        <SyncNudge onReload={reloadFromRemote} onDismiss={() => setRemoteAhead(null)} />
+      )}
 
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         <main className="relative h-[50dvh] shrink-0 bg-[#060b16] lg:h-auto lg:min-h-0 lg:flex-1">
