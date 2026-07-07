@@ -1,4 +1,4 @@
-import type { FitStatus, Pt, Room } from "./types";
+import type { FitStatus, Opening, Pt, Room } from "./types";
 
 export function segLength(a: Pt, b: Pt): number {
   return Math.hypot(b.x - a.x, b.y - a.y);
@@ -209,6 +209,44 @@ export function outwardNormal(a: Pt, b: Pt, verts: Pt[]): Pt {
 
 export function normalizeAngle(deg: number): number {
   return ((deg % 360) + 360) % 360;
+}
+
+export const MIN_OPENING_CM = 1;
+
+/** Length of wall `wallIndex` (vertices[wallIndex] -> vertices[(wallIndex+1)%n]). */
+export function wallLength(verts: Pt[], wallIndex: number): number {
+  const n = verts.length;
+  return segLength(verts[wallIndex], verts[(wallIndex + 1) % n]);
+}
+
+/** Clamp an opening to its wall: length in [min(MIN,wallLen), wallLen], offset in [0, wallLen-length]. */
+export function clampOpening(o: Opening, wallLen: number): Opening {
+  const length = Math.max(Math.min(MIN_OPENING_CM, wallLen), Math.min(o.length, wallLen));
+  const offset = Math.max(0, Math.min(o.offset, wallLen - length));
+  return { ...o, offset, length };
+}
+
+/** The two endpoints of the opening slice, for rendering & hit-testing. */
+export function openingSegment(o: Opening, verts: Pt[]): { p1: Pt; p2: Pt } {
+  const n = verts.length;
+  const a = verts[o.wallIndex];
+  const b = verts[(o.wallIndex + 1) % n];
+  const len = segLength(a, b);
+  if (len === 0) return { p1: a, p2: a };
+  const ux = (b.x - a.x) / len;
+  const uy = (b.y - a.y) / len;
+  const p1 = { x: a.x + ux * o.offset, y: a.y + uy * o.offset };
+  const p2 = { x: a.x + ux * (o.offset + o.length), y: a.y + uy * (o.offset + o.length) };
+  return { p1, p2 };
+}
+
+/** Signed distance of point p projected along wall a->b, measured from a (NOT clamped). */
+export function alongWall(p: Pt, a: Pt, b: Pt): number {
+  const len = segLength(a, b);
+  if (len === 0) return 0;
+  const ux = (b.x - a.x) / len;
+  const uy = (b.y - a.y) / len;
+  return (p.x - a.x) * ux + (p.y - a.y) * uy;
 }
 
 export interface RoomAnalysis {
