@@ -1,5 +1,6 @@
 import type { AppState, Room } from "./types";
 import { uid } from "./types";
+import { wallLength } from "./geometry";
 
 export const ITEM_COLORS = [
   "#38bdf8",
@@ -22,29 +23,30 @@ export function makeRoom(name: string): Room {
       { x: 400, y: 300 },
       { x: 0, y: 300 },
     ],
-    wallTags: {},
+    openings: [],
     items: [],
   };
 }
 
 export function seedState(): AppState {
+  const vertices = [
+    { x: 0, y: 0 },
+    { x: 150, y: 0 },
+    { x: 150, y: 99 },
+    { x: 260, y: 99 },
+    { x: 260, y: 270 },
+    { x: 0, y: 270 },
+  ];
   const room: Room = {
     id: uid(),
     name: "Home Office",
-    vertices: [
-      { x: 0, y: 0 },
-      { x: 150, y: 0 },
-      { x: 150, y: 99 },
-      { x: 260, y: 99 },
-      { x: 260, y: 270 },
-      { x: 0, y: 270 },
-    ],
-    wallTags: {
+    vertices,
+    openings: [
       // segment 4: (260,270) -> (0,270), the 260 cm bottom wall
-      4: { label: "Window", color: "#38bdf8" },
+      { id: uid(), wallIndex: 4, offset: 0, length: wallLength(vertices, 4), kind: "window" },
       // segment 1: (150,0) -> (150,99), the notch gap top-right
-      1: { label: "Door", color: "#f59e0b", isDoor: true },
-    },
+      { id: uid(), wallIndex: 1, offset: 0, length: wallLength(vertices, 1), kind: "door" },
+    ],
     items: [
       {
         id: uid(),
@@ -68,5 +70,5 @@ export function seedState(): AppState {
       },
     ],
   };
-  return { version: 1, rooms: [room], currentRoomId: room.id };
+  return { version: 2, rooms: [room], currentRoomId: room.id };
 }
